@@ -64,21 +64,36 @@ function emptyValues(): BotValues {
   return { name: "", avatar: nanoid(), job: "", instructions: "" }
 }
 
-function BotDialog({ children }: { children: React.ReactElement }) {
-  const [open, setOpen] = React.useState(false)
+function BotDialog({
+  children,
+  open: openProp,
+  onOpenChange,
+}: {
+  children?: React.ReactElement
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
+  const open = openProp ?? uncontrolledOpen
   const form = useForm({
     resolver: zodResolver(insertBotSchema),
     defaultValues: emptyValues(),
   })
 
-  function handleOpenChange(next: boolean) {
-    if (next) form.reset(emptyValues())
-    setOpen(next)
+  function setOpen(next: boolean) {
+    setUncontrolledOpen(next)
+    onOpenChange?.(next)
+  }
+
+  // Reset after closing rather than on open, so a dialog opened by a
+  // controlling parent (which never fires onOpenChange(true)) starts fresh too.
+  function handleOpenChangeComplete(next: boolean) {
+    if (!next) form.reset(emptyValues())
   }
 
   async function onSubmit(values: BotValues) {
     try {
-      const bot = await createBot(values)
+      const { bot } = await createBot(values)
       toast.add({ title: `${bot.name} is ready` })
       setOpen(false)
     } catch {
@@ -90,8 +105,12 @@ function BotDialog({ children }: { children: React.ReactElement }) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={children} />
+    <Dialog
+      open={open}
+      onOpenChange={setOpen}
+      onOpenChangeComplete={handleOpenChangeComplete}
+    >
+      {children && <DialogTrigger render={children} />}
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={form.handleSubmit(onSubmit)} className="contents">
           <DialogHeader>

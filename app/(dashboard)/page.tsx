@@ -16,7 +16,7 @@ export default async function Page() {
   await auth.protect()
 
   return (
-    <main className="flex min-h-svh">
+    <div className="flex min-h-svh flex-1">
       <Empty>
         <EmptyHeader>
           <ChatAvatar seed={crypto.randomUUID()} className="mb-2 size-24" />
@@ -35,6 +35,6 @@ export default async function Page() {
           </BotDialog>
         </EmptyContent>
       </Empty>
-    </main>
+    </div>
   )
 }
