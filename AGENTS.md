@@ -57,3 +57,64 @@ thing:
 Only JavaScript and the HTTP API have a pre-10 form. The other six cores were
 released in 2026 and never had one, so any older-looking PHP, Python, Rust, Go,
 Dart or C# API attributed to DiceBear is invented rather than outdated.
+
+## Forms
+
+Every form follows the bot dialog: one zod schema, validated on the client and
+again in the server action. See `components/bot-dialog.tsx`, `actions/bot.ts`,
+and `insertBotSchema` in `lib/db/schema.ts`.
+
+Packages: `zod` (v4), `react-hook-form`, `@hookform/resolvers`, `drizzle-zod`.
+There is no shadcn `form.tsx`. Do not add one.
+
+Schema
+
+- Generate it from the Drizzle table with `createInsertSchema` from
+  `drizzle-zod`, next to the table in `lib/db/schema.ts`. Do not write a zod
+  object for a table by hand.
+- Refine fields in the second argument with user-facing messages, for example
+  `name: (s) => s.trim().min(1, "Give it a name").max(50)`.
+- `.pick()` only the fields the user fills in. Never include `id`, `userId`,
+  timestamps, or other server-set columns. They come from the server.
+- Type form values as `z.input<typeof schema>`.
+
+Server action
+
+- Put it in `actions/<table>.ts` with `"use server"` and name it after the
+  verb: `createBot`, `updateBot`.
+- First line: `const { userId } = await auth.protect()`. Take `userId` from
+  Clerk, never from the input.
+- Parse the input with the same schema. Client validation is not trusted.
+- Store empty optional text as `null` (`data.instructions || null`).
+- Write with `db` from `@/lib/db`, `revalidatePath` the affected route, and
+  return the row with `.returning()`.
+
+Client component
+
+- `"use client"`, in `components/`. Use
+  `useForm({ resolver: zodResolver(schema), defaultValues })`.
+- Render every field with `Controller` and the `Field` components from
+  `components/ui/field.tsx`:
+  `<Field data-invalid={fieldState.invalid}>`, a `FieldLabel` whose `htmlFor`
+  matches the input `id`, `aria-invalid={fieldState.invalid}` on the input,
+  and `<FieldError errors={[fieldState.error]} />` when invalid.
+- Pass `value={field.value ?? ""}` to inputs bound to nullable columns.
+- Give every button that does not submit `type="button"`.
+- Disable the submit button while `form.formState.isSubmitting` and show
+  `<Spinner data-icon="inline-start" />` in it.
+- Call the server action in `onSubmit` with `try`/`catch`. On success,
+  `toast.add` from `components/ui/toast.tsx` and close the form. On failure,
+  `toast.add` an error and keep the user's input.
+
+Forms in dialogs
+
+- The component takes its trigger as `children` and renders
+  `<DialogTrigger render={children} />`, so server pages pass their own button.
+- Control `open` with state, and in `onOpenChange` call `form.reset()` with
+  fresh default values when opening.
+- Wrap the dialog body in `<form className="contents">` inside
+  `DialogContent`, so `DialogFooter` keeps its full-bleed layout and its
+  submit button submits the form.
+- Cancel is `<DialogClose render={<Button type="button" variant="outline" />}>`.
+- The UI components are Base UI. Compose with the `render` prop, not
+  `asChild`.
