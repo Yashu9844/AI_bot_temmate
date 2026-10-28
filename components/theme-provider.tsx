@@ -3,6 +3,15 @@
 import * as React from "react"
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
 
+// next-themes renders an inline script that sets the theme before paint.
+// React 19 warns about script tags rendered on the client, so only the
+// server-rendered copy stays executable; on the client it becomes inert
+// (the script already has suppressHydrationWarning, so the type differs safely)
+const scriptProps =
+  typeof window === "undefined"
+    ? undefined
+    : ({ type: "application/json" } as const)
+
 function ThemeProvider({
   children,
   ...props
@@ -13,6 +22,7 @@ function ThemeProvider({
       defaultTheme="system"
       enableSystem
       disableTransitionOnChange
+      scriptProps={scriptProps}
       {...props}
     >
       <ThemeHotkey />

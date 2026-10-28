@@ -118,3 +118,10 @@ Forms in dialogs
 - Cancel is `<DialogClose render={<Button type="button" variant="outline" />}>`.
 - The UI components are Base UI. Compose with the `render` prop, not
   `asChild`.
+
+## Git
+
+Never switch branches (`git checkout`, `git switch`, creating a branch, or
+working in a worktree) without telling the user first and getting a go-ahead.
+Work on whatever branch is checked out. If the task seems to need a different
+branch, ask.

@@ -77,6 +77,14 @@ export function AppSidebar({ chats }: { chats: ChatWithBots[] }) {
   const [searchOpen, setSearchOpen] = React.useState(false)
   const pathname = usePathname()
   const router = useRouter()
+  const contentRef = React.useRef<HTMLDivElement>(null)
+
+  // Keep the active chat in view, e.g. after opening one from search
+  React.useEffect(() => {
+    contentRef.current
+      ?.querySelector('[aria-current="page"]')
+      ?.scrollIntoView({ block: "nearest" })
+  }, [pathname])
 
   React.useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -138,20 +146,22 @@ export function AppSidebar({ chats }: { chats: ChatWithBots[] }) {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent ref={contentRef}>
         <SidebarGroup>
           <SidebarGroupLabel>Chats</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {chats.map((chat) => {
                 const href = `/chats/${chat.id}`
+                const isActive = pathname === href
 
                 return (
                   <SidebarMenuItem key={chat.id}>
                     <SidebarMenuButton
                       size="lg"
                       tooltip={chatName(chat)}
-                      isActive={pathname === href}
+                      isActive={isActive}
+                      aria-current={isActive ? "page" : undefined}
                       render={<Link href={href} />}
                     >
                       <ChatSummary chat={chat} />
