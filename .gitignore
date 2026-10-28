@@ -38,3 +38,6 @@ pnpm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 .clerk/
+
+# trigger.dev
+.trigger

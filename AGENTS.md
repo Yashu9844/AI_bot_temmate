@@ -125,3 +125,9 @@ Never switch branches (`git checkout`, `git switch`, creating a branch, or
 working in a worktree) without telling the user first and getting a go-ahead.
 Work on whatever branch is checked out. If the task seems to need a different
 branch, ask.
+
+<!-- TRIGGER.DEV SKILLS START -->
+## Trigger.dev agent skills
+
+This project has Trigger.dev agent skills installed in `.agents/skills/`. Before writing or changing Trigger.dev code (background tasks, scheduled tasks, realtime, or chat.agent AI agents), load the most relevant skill: `trigger-authoring-chat-agent`.
+<!-- TRIGGER.DEV SKILLS END -->
