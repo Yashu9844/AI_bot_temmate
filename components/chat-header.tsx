@@ -1,15 +1,16 @@
 import { BotDialog } from "@/components/bot-dialog"
-import { ChatAvatar } from "@/components/chat-avatar"
 import { DesktopPanelTrigger } from "@/components/desktop-panel"
+import { ChatMembersAvatar } from "@/components/group-chat-avatar"
 import { Button } from "@/components/ui/button"
 import type { ChatWithMembers } from "@/queries/chats"
 
 function ChatHeader({ chat }: { chat: ChatWithMembers }) {
-  // Group chats aren't handled yet; show the first bot
-  const bot = chat.members[0]?.bot
+  const isGroup = chat.kind === "group"
+  // A direct chat's bot can be edited from the header; a group has several
+  const bot = isGroup ? undefined : chat.members[0]?.bot
   const title = (
     <>
-      <ChatAvatar seed={bot?.avatar ?? chat.id} className="size-5" />
+      <ChatMembersAvatar chat={chat} className="size-5" />
       <span className="truncate">{chat.name ?? bot?.name}</span>
     </>
   )
@@ -32,7 +33,8 @@ function ChatHeader({ chat }: { chat: ChatWithMembers }) {
           {title}
         </div>
       )}
-      <DesktopPanelTrigger className="ml-auto" />
+      {/* Only a direct chat has one bot's desktop to show */}
+      {!isGroup && <DesktopPanelTrigger className="ml-auto" />}
     </header>
   )
 }

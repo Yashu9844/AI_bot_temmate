@@ -6,6 +6,7 @@ import {
   useLoadTranscript,
   useTriggerChatTransport,
 } from "@trigger.dev/sdk/chat/react"
+import { useState } from "react"
 import Image from "next/image"
 
 import {
@@ -14,6 +15,7 @@ import {
   startChatSession,
 } from "@/actions/chat"
 
+import { ChatAvatar } from "@/components/chat-avatar"
 import { CodeBlock } from "@/components/ai-elements/code-block"
 import {
   Conversation,
@@ -30,8 +32,14 @@ import {
   PromptInput,
   PromptInputBody,
   PromptInputFooter,
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input"
 import { Terminal } from "@/components/ai-elements/terminal"
@@ -46,11 +54,13 @@ import type { chatAgent } from "@/src/trigger/chat"
 import type { ChatUIMessage } from "@/src/trigger/tools"
 
 type Part = ChatUIMessage["parts"][number]
+type ChatBot = { id: string; name: string; avatar: string }
 type ToolPart = Extract<Part, { type: `tool-${string}` }>
 
 // Loads the saved transcript first, so useChat starts from the same history
 // the transport's resume cursor points past
-function Chat({ chatId }: { chatId: string }) {
+// `bots` is passed for group chats, so the composer can pick who answers
+function Chat({ chatId, bots }: { chatId: string; bots?: ChatBot[] }) {
   const transport = useTriggerChatTransport<typeof chatAgent>({
     task: "chat",
     accessToken: ({ chatId }) => mintChatAccessToken(chatId),
@@ -68,6 +78,7 @@ function Chat({ chatId }: { chatId: string }) {
       chatId={chatId}
       initialMessages={messages as ChatUIMessage[]}
       transport={transport}
+      bots={bots}
     />
   )
 }
@@ -76,11 +87,14 @@ function ChatMessages({
   chatId,
   initialMessages,
   transport,
+  bots,
 }: {
   chatId: string
   initialMessages: ChatUIMessage[]
   transport: TriggerChatTransport
+  bots?: ChatBot[]
 }) {
+  const [botId, setBotId] = useState(bots?.[0]?.id)
   const { messages, sendMessage, status, stop, error } = useChat<ChatUIMessage>(
     {
       id: chatId,
@@ -91,7 +105,8 @@ function ChatMessages({
 
   function handleSubmit({ text }: PromptInputMessage) {
     if (!text.trim()) return
-    sendMessage({ text })
+    // Rides the transport's per-turn metadata; the agent answers as this bot
+    sendMessage({ text }, botId ? { metadata: { botId } } : undefined)
   }
 
   return (
@@ -127,12 +142,62 @@ function ChatMessages({
           <PromptInputBody>
             <PromptInputTextarea />
           </PromptInputBody>
-          <PromptInputFooter className="justify-end">
+          <PromptInputFooter className={bots ? undefined : "justify-end"}>
+            {bots && (
+              <PromptInputTools>
+                <BotSelect bots={bots} value={botId} onChange={setBotId} />
+              </PromptInputTools>
+            )}
             <PromptInputSubmit status={status} onStop={stop} />
           </PromptInputFooter>
         </PromptInput>
       </div>
     </div>
+  )
+}
+
+// Who answers the next message in a group chat
+function BotSelect({
+  bots,
+  value,
+  onChange,
+}: {
+  bots: ChatBot[]
+  value: string | undefined
+  onChange: (botId: string) => void
+}) {
+  return (
+    <PromptInputSelect
+      value={value ?? null}
+      onValueChange={(next) => {
+        if (typeof next === "string") onChange(next)
+      }}
+    >
+      <PromptInputSelectTrigger size="sm" aria-label="Bot to talk to">
+        <PromptInputSelectValue>
+          {(id: string | null) => {
+            const bot = bots.find((b) => b.id === id)
+            return bot ? <BotOption bot={bot} /> : "Pick a bot"
+          }}
+        </PromptInputSelectValue>
+      </PromptInputSelectTrigger>
+      <PromptInputSelectContent>
+        {bots.map((bot) => (
+          <PromptInputSelectItem key={bot.id} value={bot.id}>
+            <BotOption bot={bot} />
+          </PromptInputSelectItem>
+        ))}
+      </PromptInputSelectContent>
+    </PromptInputSelect>
+  )
+}
+
+function BotOption({ bot }: { bot: ChatBot }) {
+  return (
+    <>
+      <ChatAvatar seed={bot.avatar} className="size-4" />
+      <span className="truncate">{bot.name}</span>
+    </>
   )
 }
 

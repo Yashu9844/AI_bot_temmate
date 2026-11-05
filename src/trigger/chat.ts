@@ -1,7 +1,8 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { chat, defaultStorage } from "@trigger.dev/sdk/ai"
 import { stepCountIs } from "ai"
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
+import { z } from "zod"
 
 import { db } from "@/lib/db"
 import { chatMembers, type Bot } from "@/lib/db/schema"
@@ -17,15 +18,29 @@ const nebius = createOpenAICompatible({
   supportsMultiPartToolContent: true,
 })
 
-// The bot that answers in this chat. Chats are direct for now, so it's the
-// only member.
-async function getChatBot(chatId: string) {
+// Sent by the composer with every message. In a group chat it names the bot
+// the user is talking to; direct chats leave it out.
+export const chatClientData = z.object({
+  botId: z.string().optional(),
+})
+
+// The bot that answers this turn: the picked one, if it's in the chat,
+// otherwise the first member (a direct chat's only bot)
+async function getChatBot(chatId: string, botId?: string) {
   const member = await db.query.chatMembers.findFirst({
-    where: eq(chatMembers.chatId, chatId),
+    where: botId
+      ? and(eq(chatMembers.chatId, chatId), eq(chatMembers.botId, botId))
+      : eq(chatMembers.chatId, chatId),
     orderBy: asc(chatMembers.joinedAt),
     with: { bot: true },
   })
-  if (!member) throw new Error(`No bot in chat ${chatId}`)
+  if (!member) {
+    throw new Error(
+      botId
+        ? `Bot ${botId} isn't in chat ${chatId}`
+        : `No bot in chat ${chatId}`
+    )
+  }
   return member.bot
 }
 
@@ -39,33 +54,36 @@ function systemPrompt(bot: Bot) {
   return sections.filter(Boolean).join("\n\n")
 }
 
-export const chatAgent = chat.withUIMessage<ChatUIMessage>().agent({
-  id: "chat",
-  // Platform transcript snapshot, keyed by chat id
-  storage: defaultStorage,
-  // Declared here too so screenshots reach the model as images on later turns
-  tools,
-  onBoot: async () => {
-    botSandbox.init({ sandboxId: null })
-  },
-  // Every turn, so edits to the bot's name, job, or instructions apply to the
-  // next message
-  onTurnStart: async ({ chatId }) => {
-    const bot = await getChatBot(chatId)
-    botSandbox.sandboxId = bot.sandboxId
-    chat.prompt.set(systemPrompt(bot))
-  },
-  // streamText comes from the run argument so the managed options apply,
-  // including the system prompt set above
-  run: async ({ messages, tools, signal, streamText }) =>
-    streamText({
-      // Sees screenshots and gives accurate pixel coordinates, at low cost
-      model: nebius("MiniMaxAI/MiniMax-M3.1-Flash"),
-      messages,
-      tools,
-      abortSignal: signal,
-      // Computer use takes many small steps: look, click, look again
-      stopWhen: stepCountIs(30),
-      maxOutputTokens: 4000,
-    }),
-})
+export const chatAgent = chat
+  .withUIMessage<ChatUIMessage>()
+  .withClientData({ schema: chatClientData })
+  .agent({
+    id: "chat",
+    // Platform transcript snapshot, keyed by chat id
+    storage: defaultStorage,
+    // Declared here too so screenshots reach the model as images on later turns
+    tools,
+    onBoot: async () => {
+      botSandbox.init({ sandboxId: null })
+    },
+    // Every turn, so edits to the bot's name, job, or instructions apply to the
+    // next message, and a group chat can switch bots between messages
+    onTurnStart: async ({ chatId, clientData }) => {
+      const bot = await getChatBot(chatId, clientData?.botId)
+      botSandbox.sandboxId = bot.sandboxId
+      chat.prompt.set(systemPrompt(bot))
+    },
+    // streamText comes from the run argument so the managed options apply,
+    // including the system prompt set above
+    run: async ({ messages, tools, signal, streamText }) =>
+      streamText({
+        // Sees screenshots and gives accurate pixel coordinates, at low cost
+        model: nebius("MiniMaxAI/MiniMax-M3.1-Flash"),
+        messages,
+        tools,
+        abortSignal: signal,
+        // Computer use takes many small steps: look, click, look again
+        stopWhen: stepCountIs(30),
+        maxOutputTokens: 4000,
+      }),
+  })

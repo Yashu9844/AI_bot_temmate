@@ -15,8 +15,14 @@ export default async function ChatPage({
   const chat = await getChat(chatId)
   if (!chat) notFound()
 
-  // Group chats aren't handled yet; show the first bot's screen
-  const bot = chat.members[0]?.bot
+  const isGroup = chat.kind === "group"
+  // A direct chat shows its bot's screen; groups have no desktop panel
+  const bot = isGroup ? undefined : chat.members[0]?.bot
+  const bots = chat.members.map((m) => ({
+    id: m.bot.id,
+    name: m.bot.name,
+    avatar: m.bot.avatar,
+  }))
 
   return (
     <DesktopPanelProvider>
@@ -28,13 +34,19 @@ export default async function ChatPage({
           <ResizablePanel id="chat" minSize="30%">
             <div className="flex h-full flex-col">
               <ChatHeader chat={chat} />
-              <Chat key={chat.id} chatId={chat.id} />
+              <Chat
+                key={chat.id}
+                chatId={chat.id}
+                bots={isGroup ? bots : undefined}
+              />
             </div>
           </ResizablePanel>
-          <DesktopPanel
-            key={chat.id}
-            bot={bot && { id: bot.id, name: bot.name }}
-          />
+          {!isGroup && (
+            <DesktopPanel
+              key={chat.id}
+              bot={bot && { id: bot.id, name: bot.name }}
+            />
+          )}
         </ResizablePanelGroup>
       </div>
     </DesktopPanelProvider>

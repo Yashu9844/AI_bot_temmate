@@ -8,7 +8,8 @@ import { formatDistanceToNowStrict } from "date-fns"
 import { PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
 
 import { BotDialog } from "@/components/bot-dialog"
-import { ChatAvatar } from "@/components/chat-avatar"
+import { ChatMembersAvatar } from "@/components/group-chat-avatar"
+import { GroupChatDialog } from "@/components/group-chat-dialog"
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle"
 import {
   Command,
@@ -39,20 +40,18 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import type { ChatWithBots } from "@/queries/bots"
+import type { BotSummary, ChatWithBots } from "@/queries/bots"
 
-// Group chats aren't handled yet; show the first bot
+// Groups have their own name; direct chats go by their bot's
 function chatName(chat: ChatWithBots) {
   return chat.name ?? chat.members[0]?.bot.name ?? ""
 }
 
 // Avatar, name, time, and preview; shared by the sidebar and search rows
 function ChatSummary({ chat }: { chat: ChatWithBots }) {
-  const bot = chat.members[0]?.bot
-
   return (
     <>
-      <ChatAvatar seed={bot?.avatar ?? chat.id} />
+      <ChatMembersAvatar chat={chat} />
       <div className="grid flex-1 text-left text-sm leading-tight">
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate font-medium">{chatName(chat)}</span>
@@ -72,8 +71,15 @@ function ChatSummary({ chat }: { chat: ChatWithBots }) {
   )
 }
 
-export function AppSidebar({ chats }: { chats: ChatWithBots[] }) {
+export function AppSidebar({
+  chats,
+  bots,
+}: {
+  chats: ChatWithBots[]
+  bots: BotSummary[]
+}) {
   const [botDialogOpen, setBotDialogOpen] = React.useState(false)
+  const [groupDialogOpen, setGroupDialogOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const pathname = usePathname()
   const router = useRouter()
@@ -121,7 +127,7 @@ export function AppSidebar({ chats }: { chats: ChatWithBots[] }) {
                     <PlusIcon />
                     Create new bot
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setGroupDialogOpen(true)}>
                     <UsersIcon />
                     Create group chat
                   </DropdownMenuItem>
@@ -205,6 +211,11 @@ export function AppSidebar({ chats }: { chats: ChatWithBots[] }) {
       </SidebarFooter>
       <SidebarResizeHandle />
       <BotDialog open={botDialogOpen} onOpenChange={setBotDialogOpen} />
+      <GroupChatDialog
+        bots={bots}
+        open={groupDialogOpen}
+        onOpenChange={setGroupDialogOpen}
+      />
       <CommandDialog
         open={searchOpen}
         onOpenChange={setSearchOpen}
