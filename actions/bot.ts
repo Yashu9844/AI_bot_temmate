@@ -4,8 +4,10 @@ import { auth } from "@clerk/nextjs/server"
 import { and, eq, inArray } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
+import { nanoid } from "nanoid"
 import type { z } from "zod"
 
+import { createBotSandbox, deleteSandbox } from "@/lib/daytona"
 import { db } from "@/lib/db"
 import { bots, chatMembers, chats, insertBotSchema } from "@/lib/db/schema"
 
@@ -14,20 +16,39 @@ export async function createBot(values: z.input<typeof insertBotSchema>) {
 
   const data = insertBotSchema.parse(values)
 
-  // A new bot starts with its own direct chat; all three rows land or none do
-  const result = await db.transaction(async (tx) => {
-    const [bot] = await tx
-      .insert(bots)
-      .values({ ...data, instructions: data.instructions || null, userId })
-      .returning()
-    const [chat] = await tx
-      .insert(chats)
-      .values({ userId, kind: "direct" })
-      .returning()
-    await tx.insert(chatMembers).values({ chatId: chat.id, botId: bot.id })
+  // Every bot gets its own sandbox. Create it first so the row can store its ID.
+  const botId = nanoid()
+  const sandboxId = await createBotSandbox(botId, userId)
 
-    return { bot, chat }
-  })
+  // A new bot starts with its own direct chat; all three rows land or none do
+  let result
+  try {
+    result = await db.transaction(async (tx) => {
+      const [bot] = await tx
+        .insert(bots)
+        .values({
+          ...data,
+          id: botId,
+          instructions: data.instructions || null,
+          userId,
+          sandboxId,
+        })
+        .returning()
+      const [chat] = await tx
+        .insert(chats)
+        .values({ userId, kind: "direct" })
+        .returning()
+      await tx.insert(chatMembers).values({ chatId: chat.id, botId: bot.id })
+
+      return { bot, chat }
+    })
+  } catch (error) {
+    // No bot row points at the sandbox, so don't leave it behind
+    await deleteSandbox(sandboxId).catch((cleanupError) =>
+      console.error(`Failed to delete orphaned sandbox ${sandboxId}`, cleanupError)
+    )
+    throw error
+  }
 
   revalidatePath("/")
   return result
@@ -56,7 +77,7 @@ export async function updateBot(
 export async function deleteBot(botId: string) {
   const { userId } = await auth.protect()
 
-  await db.transaction(async (tx) => {
+  const { sandboxId } = await db.transaction(async (tx) => {
     // Direct chats can't outlive their bot; group chats just lose a member
     const direct = await tx
       .select({ id: chats.id })
@@ -81,10 +102,19 @@ export async function deleteBot(botId: string) {
     const [bot] = await tx
       .delete(bots)
       .where(and(eq(bots.id, botId), eq(bots.userId, userId)))
-      .returning({ id: bots.id })
+      .returning({ id: bots.id, sandboxId: bots.sandboxId })
     // Rolls back the chat deletes too
     if (!bot) throw new Error("Bot not found")
+
+    return bot
   })
+
+  // The bot is gone either way; a sandbox that fails to delete is only logged
+  if (sandboxId) {
+    await deleteSandbox(sandboxId).catch((error) =>
+      console.error(`Failed to delete sandbox ${sandboxId}`, error)
+    )
+  }
 
   revalidatePath("/", "layout")
   // The current page is likely this bot's chat, which no longer exists
