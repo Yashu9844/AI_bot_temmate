@@ -5,7 +5,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { UserButton } from "@clerk/nextjs"
 import { formatDistanceToNowStrict } from "date-fns"
-import { PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
+import { GaugeIcon, PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
 
 import { BotDialog } from "@/components/bot-dialog"
 import { ChatMembersAvatar } from "@/components/group-chat-avatar"
@@ -204,7 +204,16 @@ export function AppSidebar({
                       "truncate p-0 text-sm font-medium text-inherit group-data-[collapsible=icon]:hidden",
                   },
                 }}
-              />
+              >
+                {/* Usage lives here rather than in the sidebar nav */}
+                <UserButton.MenuItems>
+                  <UserButton.Link
+                    label="Usage"
+                    labelIcon={<GaugeIcon className="size-4" />}
+                    href="/usage"
+                  />
+                </UserButton.MenuItems>
+              </UserButton>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

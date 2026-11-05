@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm"
 import {
   index,
+  integer,
   pgEnum,
   pgTable,
   primaryKey,
@@ -120,3 +121,49 @@ export const chatMembersRelations = relations(chatMembers, ({ one }) => ({
   chat: one(chats, { fields: [chatMembers.chatId], references: [chats.id] }),
   bot: one(bots, { fields: [chatMembers.botId], references: [bots.id] }),
 }))
+
+// Usage ledger. One append-only row per metered event; usage for a billing
+// period is the sum of the rows inside it. Rows keep plain ids rather than
+// foreign keys so they outlive the bot, chat, or sandbox they were for.
+export const usageMeter = pgEnum("usage_meter", [
+  "ai_tokens",
+  "sandbox_seconds",
+])
+
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => nanoid()),
+    // Clerk user ID
+    userId: text("user_id").notNull(),
+    meter: usageMeter("meter").notNull(),
+    // Tokens for ai_tokens, seconds for sandbox_seconds
+    quantity: integer("quantity").notNull(),
+    // Split of an ai_tokens row, kept for auditing
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    chatId: text("chat_id"),
+    botId: text("bot_id"),
+    sandboxId: text("sandbox_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("usage_events_user_meter_idx").on(t.userId, t.meter, t.createdAt),
+  ]
+)
+
+export type UsageEvent = typeof usageEvents.$inferSelect
+export type NewUsageEvent = typeof usageEvents.$inferInsert
+
+// Where the sandbox meter left off with each sandbox, so every tick charges
+// only the running time since the last one
+export const sandboxMeters = pgTable("sandbox_meters", {
+  sandboxId: text("sandbox_id").primaryKey(),
+  userId: text("user_id").notNull(),
+  // Last tick that saw it running; the row is dropped once it stops
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+})

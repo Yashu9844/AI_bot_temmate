@@ -7,12 +7,18 @@ import { redirect } from "next/navigation"
 import { nanoid } from "nanoid"
 import type { z } from "zod"
 
+import { assertFeatures, FEATURES } from "@/lib/billing"
 import { createBotSandbox, deleteSandbox } from "@/lib/daytona"
 import { db } from "@/lib/db"
 import { bots, chatMembers, chats, insertBotSchema } from "@/lib/db/schema"
+import { assertWithinLimits } from "@/lib/usage-server"
 
 export async function createBot(values: z.input<typeof insertBotSchema>) {
-  const { userId } = await auth.protect()
+  const { userId, has } = await auth.protect()
+  // A new bot comes with its own sandbox, so it needs both features
+  assertFeatures(has, FEATURES.bots, FEATURES.sandboxes)
+  // Room for one more bot, and sandbox time left to boot its sandbox
+  await assertWithinLimits(userId, ["bots", "sandbox_seconds"])
 
   const data = insertBotSchema.parse(values)
 
@@ -45,7 +51,10 @@ export async function createBot(values: z.input<typeof insertBotSchema>) {
   } catch (error) {
     // No bot row points at the sandbox, so don't leave it behind
     await deleteSandbox(sandboxId).catch((cleanupError) =>
-      console.error(`Failed to delete orphaned sandbox ${sandboxId}`, cleanupError)
+      console.error(
+        `Failed to delete orphaned sandbox ${sandboxId}`,
+        cleanupError
+      )
     )
     throw error
   }

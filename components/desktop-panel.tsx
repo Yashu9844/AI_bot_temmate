@@ -7,6 +7,9 @@ import { usePanelRef } from "react-resizable-panels"
 import { cn } from "cn"
 
 import { getBotScreenUrl } from "@/actions/sandbox"
+import { useFeatureGate } from "@/hooks/use-feature-gate"
+import { useUsageGate } from "@/hooks/use-usage-gate"
+import { FEATURES } from "@/lib/billing"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -72,15 +75,20 @@ type Screen =
 function DesktopPanel({ bot }: { bot?: { id: string; name: string } }) {
   const { panelRef, open, setOpen } = useDesktopPanel()
   const [screen, setScreen] = React.useState<Screen>({ status: "idle" })
+  const gate = useFeatureGate()
+  const usageGate = useUsageGate()
   const [fullscreen, setFullscreen] = React.useState(false)
-  const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(
-    null
-  )
+  const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(null)
   const [dialogSlot, setDialogSlot] = React.useState<HTMLElement | null>(null)
 
   const botId = bot?.id
   const load = React.useCallback(async () => {
     if (!botId) return
+    // Connecting to the sandbox needs the paid plan
+    if (!gate(FEATURES.sandboxes) || !(await usageGate("sandbox_seconds"))) {
+      setScreen({ status: "error" })
+      return
+    }
     // Keep the current URL so the frame stays up while a fresh one loads
     setScreen((prev) => ({
       status: "loading",
@@ -95,7 +103,7 @@ function DesktopPanel({ bot }: { bot?: { id: string; name: string } }) {
         url: "url" in prev ? prev.url : undefined,
       }))
     }
-  }, [botId])
+  }, [botId, gate, usageGate])
 
   // Starting the sandbox costs time and compute, so wait until the panel is
   // first opened. After that the connection is kept, even while collapsed.

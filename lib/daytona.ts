@@ -1,4 +1,9 @@
-import { Daytona, DaytonaNotFoundError, type Sandbox } from "@daytona/sdk"
+import {
+  Daytona,
+  DaytonaNotFoundError,
+  SandboxState,
+  type Sandbox,
+} from "@daytona/sdk"
 
 // Reuse one client across hot reloads in dev.
 const globalForDaytona = globalThis as unknown as { daytona?: Daytona }
@@ -13,9 +18,35 @@ const daytona =
   })
 if (process.env.NODE_ENV !== "production") globalForDaytona.daytona = daytona
 
+// The bot's long-term memory. Every chat the bot is in shares its one sandbox,
+// so what it saves here in a private chat it can recall in a group chat.
+export const MEMORY_PATH = "/home/daytona/MEMORY.md"
+
+const AUTO_STOP_MINUTES = 5
+const AUTO_ARCHIVE_MINUTES = 24 * 60
+
 // One sandbox per bot. Labels tie it back to the bot in the Daytona dashboard.
+// It starts with a blank memory file for the bot to fill in.
 export async function createBotSandbox(botId: string, userId: string) {
-  const sandbox = await daytona.create({ labels: { botId, userId } })
+  const sandbox = await daytona.create({
+    labels: { botId, userId },
+    // Running time is billed and metered, so stop soon after the bot (or a
+    // connected screen) goes quiet instead of the 15 minute default
+    autoStopInterval: AUTO_STOP_MINUTES,
+    // A stopped sandbox still bills its disk; an archived one bills nothing
+    autoArchiveInterval: AUTO_ARCHIVE_MINUTES,
+  })
+  try {
+    await sandbox.fs.uploadFile(Buffer.from(""), MEMORY_PATH)
+  } catch (error) {
+    // The caller never gets the id, so it can't clean up the sandbox
+    await daytona
+      .delete(sandbox)
+      .catch((cleanupError) =>
+        console.error(`Failed to delete sandbox ${sandbox.id}`, cleanupError)
+      )
+    throw error
+  }
   return sandbox.id
 }
 
@@ -77,4 +108,36 @@ export async function getVncUrl(sandboxId: string) {
   // Scale the remote desktop to whatever box the iframe is given
   vnc.searchParams.set("resize", "scale")
   return vnc.toString()
+}
+
+// States Daytona bills like a running sandbox: all reserved resources
+const RUNNING_STATES: SandboxState[] = [
+  SandboxState.CREATING,
+  SandboxState.STARTING,
+  SandboxState.STARTED,
+  SandboxState.STOPPING,
+  SandboxState.RESTORING,
+  SandboxState.RESUMING,
+  SandboxState.PAUSING,
+]
+
+// Every sandbox the organization is being billed compute for right now
+export async function listRunningSandboxes() {
+  const running: Sandbox[] = []
+  for await (const sandbox of daytona.list({ states: RUNNING_STATES })) {
+    running.push(sandbox)
+  }
+  return running
+}
+
+// Stops a sandbox to end its compute billing. Errors are only logged: one
+// that's mid-transition is simply tried again on the next meter tick.
+export async function stopSandbox(sandbox: Sandbox) {
+  sandboxes.delete(sandbox.id)
+  if (sandbox.state !== SandboxState.STARTED) return
+  await sandbox
+    .stop()
+    .catch((error) =>
+      console.error(`Failed to stop sandbox ${sandbox.id}`, error)
+    )
 }

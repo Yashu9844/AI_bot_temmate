@@ -44,6 +44,9 @@ import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/components/ui/toast"
+import { useFeatureGate } from "@/hooks/use-feature-gate"
+import { useUsageGate } from "@/hooks/use-usage-gate"
+import { FEATURES } from "@/lib/billing"
 import { insertBotSchema, type Bot } from "@/lib/db/schema"
 
 type BotValues = z.input<typeof insertBotSchema>
@@ -146,6 +149,8 @@ function BotDialog({
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }) {
+  const gate = useFeatureGate()
+  const usageGate = useUsageGate()
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
   const open = openProp ?? uncontrolledOpen
   const form = useForm({
@@ -154,6 +159,8 @@ function BotDialog({
   })
 
   function setOpen(next: boolean) {
+    // Creating a bot needs the paid plan; editing an existing one doesn't
+    if (next && !bot && !gate(FEATURES.bots, FEATURES.sandboxes)) return
     setUncontrolledOpen(next)
     onOpenChange?.(next)
   }
@@ -170,6 +177,8 @@ function BotDialog({
         const { bot: updated } = await updateBot(bot.id, values)
         toast.add({ title: `${updated.name} is updated` })
       } else {
+        if (!gate(FEATURES.bots, FEATURES.sandboxes)) return
+        if (!(await usageGate("bots", "sandbox_seconds"))) return
         const { bot: created } = await createBot(values)
         toast.add({ title: `${created.name} is ready` })
       }

@@ -4,6 +4,7 @@ import { Chat } from "@/components/chat"
 import { ChatHeader } from "@/components/chat-header"
 import { DesktopPanel, DesktopPanelProvider } from "@/components/desktop-panel"
 import { ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
+import { getBots } from "@/queries/bots"
 import { getChat } from "@/queries/chats"
 
 export default async function ChatPage({
@@ -12,7 +13,7 @@ export default async function ChatPage({
   params: Promise<{ chatId: string }>
 }) {
   const { chatId } = await params
-  const chat = await getChat(chatId)
+  const [chat, userBots] = await Promise.all([getChat(chatId), getBots()])
   if (!chat) notFound()
 
   const isGroup = chat.kind === "group"
@@ -33,7 +34,7 @@ export default async function ChatPage({
         <ResizablePanelGroup orientation="horizontal">
           <ResizablePanel id="chat" minSize="30%">
             <div className="flex h-full flex-col">
-              <ChatHeader chat={chat} />
+              <ChatHeader chat={chat} bots={userBots} />
               <Chat
                 key={chat.id}
                 chatId={chat.id}

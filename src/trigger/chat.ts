@@ -1,9 +1,13 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { chat, defaultStorage } from "@trigger.dev/sdk/ai"
-import { stepCountIs } from "ai"
+import { stepCountIs, type LanguageModelUsage } from "ai"
 import { asc, eq } from "drizzle-orm"
 import { z } from "zod"
 
+import { FEATURES } from "@/lib/billing"
+import { assertUserFeatures } from "@/lib/billing-backend"
+import { assertWithinLimits, recordUsage } from "@/lib/usage-server"
+import { MEMORY_PATH } from "@/lib/daytona"
 import { db } from "@/lib/db"
 import { chatMembers, chats } from "@/lib/db/schema"
 
@@ -26,13 +30,20 @@ const nebius = createOpenAICompatible({
 
 // Sent by the composer with every message. In a group chat it names the bot
 // the user is talking to; direct chats leave it out.
-export const chatClientData = z.object({
-  botId: z.string().optional(),
-})
+// Optional as a whole: direct chats send no metadata at all, and an object
+// schema would reject that and fail the turn before it starts.
+export const chatClientData = z
+  .object({
+    botId: z.string().optional(),
+  })
+  .optional()
 
 // What every bot's prompt this turn shares; only "you" changes on a handoff
 const turnContext = chat.local<{
   chatName: string | null
+  chatId: string
+  // AI tokens left in the owner's period when the turn started
+  tokenBudget: number
   // Who said what so far, one line per message
   log: string[]
 }>({ id: "turnContext" })
@@ -110,6 +121,33 @@ const ENVIRONMENT_SECTION = `## Your environment
 
 You have your own sandbox: an isolated Linux computer in the cloud that belongs only to you. It has its own filesystem, processes, and network, separate from every other bot. It was created along with you and will be deleted along with you. Files in it are kept between conversations. While it isn't in use it is stopped to save resources, and it starts again when needed.`
 
+// Each chat only sees its own messages; the memory file in the bot's sandbox
+// is what carries what it learned in a private chat over to a group chat
+const MEMORY_SECTION = `## Your memory
+
+You remember nothing between chats on your own. Each chat only shows you its own messages: what the user told you in your private chat isn't visible in a group chat, and the other way around. What carries over is your memory file, ${MEMORY_PATH}, in your sandbox. Every chat you're in shares it.
+
+When to read it:
+
+- Early in a chat, before your first answer that depends on knowing the user.
+- Whenever the user asks about something they may have told you before, or refers to something you don't see in this chat ("like I said", "you know my…", "remember when…"). Read it before saying you don't know.
+- In a group chat, read it before answering anything about the user's preferences, plans, projects, or people they've mentioned, since they likely told you in private.
+
+When to update it:
+
+- The user tells you something worth knowing in a later chat: facts about them, preferences, decisions, plans and dates, ongoing work, people they mention, or anything they ask you to remember.
+- The user corrects something you saved, or asks you to forget it.
+- Skip small talk, things that only matter right now, and things already saved. Never save passwords, keys, or other secrets.
+
+How to update it:
+
+- Read the file, then write the whole file back with your change; write_file replaces everything in it. If it's missing, create it.
+- Keep it short Markdown: headings by topic, one fact per bullet. After each fact, note where you learned it, like "(private chat)" or "(group chat "Weekend plans")".
+- Change or remove outdated facts instead of adding ones that contradict them.
+- Update it quietly as you work. Mention it only if the user asked you to remember or forget something.
+
+Using it in a group chat: the group is the user and their own bots, so you can use what you remember from private chats when it's relevant or the user asks. Don't bring up personal details that have nothing to do with the conversation.`
+
 function groupSections(bot: TurnBot) {
   const { chatName, log } = turnContext
   const { members, holders } = turn
@@ -171,9 +209,39 @@ function systemPrompt(bot: TurnBot) {
       ? groupSections(bot)
       : ["## The chat\n\nThis is a one-on-one chat between you and the user."]),
     ENVIRONMENT_SECTION,
+    MEMORY_SECTION,
     TOOLS_SECTION,
   ]
   return sections.filter(Boolean).join("\n\n")
+}
+
+// Ends the turn once its steps have spent the tokens the period had left.
+// Checked between steps, so one step (capped by maxOutputTokens) can overshoot.
+function withinTokenBudget({
+  steps,
+}: {
+  steps: { usage: LanguageModelUsage }[]
+}) {
+  const spent = steps.reduce((sum, step) => sum + totalTokens(step.usage), 0)
+  return spent >= turnContext.tokenBudget
+}
+
+function totalTokens(usage: LanguageModelUsage) {
+  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
+}
+
+// One ledger row per model call, charged to the chat's owner
+async function recordStepUsage(usage: LanguageModelUsage) {
+  if (!turn.userId) return
+  await recordUsage({
+    userId: turn.userId,
+    meter: "ai_tokens",
+    quantity: totalTokens(usage),
+    inputTokens: usage.inputTokens ?? null,
+    outputTokens: usage.outputTokens ?? null,
+    chatId: turnContext.chatId,
+    botId: turn.answering?.id ?? null,
+  })
 }
 
 export const chatAgent = chat
@@ -186,18 +254,36 @@ export const chatAgent = chat
     // Declared here too so screenshots reach the model as images on later turns
     tools,
     onBoot: async () => {
-      turn.init({ isGroup: false, members: [], answering: null, holders: [] })
-      turnContext.init({ chatName: null, log: [] })
+      turn.init({
+        isGroup: false,
+        members: [],
+        answering: null,
+        holders: [],
+        userId: null,
+      })
+      turnContext.init({ chatName: null, chatId: "", tokenBudget: 0, log: [] })
     },
     // Every turn, so edits to the bots' names, jobs, or instructions apply to
     // the next message, and a group chat can switch bots between messages
     onTurnStart: async ({ chatId, clientData, uiMessages }) => {
       const found = await loadChat(chatId)
+      // The turn runs the bot and its sandbox tools, both on the paid plan.
+      // Checked here too, since a session token outlives a cancelled plan.
+      await assertUserFeatures(found.userId, [
+        FEATURES.bots,
+        FEATURES.sandboxes,
+      ])
+      // Tokens are metered per step below; the turn needs some left to start
+      const { remaining } = await assertWithinLimits(found.userId, [
+        "ai_tokens",
+      ])
+      turn.userId = found.userId
+      turnContext.chatId = chatId
+      turnContext.tokenBudget = remaining.ai_tokens
       const members = found.members.map((m) => m.bot)
       // The picked bot, if it's in the chat, otherwise the first member (a
       // direct chat's only bot)
-      const bot =
-        members.find((m) => m.id === clientData?.botId) ?? members[0]
+      const bot = members.find((m) => m.id === clientData?.botId) ?? members[0]
       if (!bot) throw new Error(`No bot in chat ${chatId}`)
       if (clientData?.botId && bot.id !== clientData.botId) {
         throw new Error(`Bot ${clientData.botId} isn't in chat ${chatId}`)
@@ -225,8 +311,9 @@ export const chatAgent = chat
     // including the system prompt set above
     run: async ({ messages, tools, signal, streamText }) =>
       streamText({
-        // Sees screenshots and gives accurate pixel coordinates, at low cost
-        model: nebius("MiniMaxAI/MiniMax-M3.1-Flash"),
+        // Sees screenshots in tool results and calls tools reliably, at low
+        // cost. Nebius retired MiniMax-M3.1-Flash, which this replaced.
+        model: nebius("deepseek-ai/DeepSeek-V4.1-Flash-1017"),
         messages,
         tools,
         // Handing off only makes sense with other bots around
@@ -244,8 +331,11 @@ export const chatAgent = chat
             : undefined
         },
         abortSignal: signal,
-        // Computer use takes many small steps: look, click, look again
-        stopWhen: stepCountIs(30),
+        // Computer use takes many small steps: look, click, look again. A long
+        // turn also ends once it has spent the tokens left in the period.
+        stopWhen: [stepCountIs(30), withinTokenBudget],
+        // Recorded per step, so a turn that fails partway is still charged
+        onStepFinish: ({ usage }) => recordStepUsage(usage),
         maxOutputTokens: 4000,
       }),
   })

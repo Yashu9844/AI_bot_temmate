@@ -4,6 +4,8 @@ import { z } from "zod"
 
 import { getComputer } from "@/lib/daytona"
 import type { Bot } from "@/lib/db/schema"
+import { UsageLimitError } from "@/lib/usage"
+import { assertWithinLimits } from "@/lib/usage-server"
 
 export type TurnBot = Pick<
   Bot,
@@ -18,6 +20,8 @@ export const turn = chat.local<{
   answering: TurnBot | null
   // Bots that have held this turn, in order; a handoff can't go back to one
   holders: string[]
+  // The chat's owner, whose plan the turn is metered against
+  userId: string | null
 }>({ id: "turn" })
 
 // Handoffs one turn may chain, so bots can't pass a message around forever
@@ -26,6 +30,17 @@ export const MAX_HANDOFFS_PER_TURN = 2
 async function sandbox() {
   const sandboxId = turn.answering?.sandboxId
   if (!sandboxId) throw new Error("This bot has no sandbox")
+  // Starting or using the sandbox is metered running time
+  if (turn.userId) {
+    try {
+      await assertWithinLimits(turn.userId, ["sandbox_seconds"])
+    } catch (error) {
+      if (!(error instanceof UsageLimitError)) throw error
+      throw new Error(
+        "The sandbox time in the user's plan is used up for this period, so the sandbox can't be used. Tell the user; it resets when their next period starts."
+      )
+    }
+  }
   return getComputer(sandboxId)
 }
 
@@ -242,7 +257,9 @@ export const tools = {
     inputSchema: z.object({
       botId: z
         .string()
-        .describe("The id of the group member to hand off to, from the member list"),
+        .describe(
+          "The id of the group member to hand off to, from the member list"
+        ),
       note: z
         .string()
         .trim()

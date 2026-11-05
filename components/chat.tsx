@@ -52,6 +52,9 @@ import {
   ToolInput,
   ToolOutput,
 } from "@/components/ai-elements/tool"
+import { useFeatureGate } from "@/hooks/use-feature-gate"
+import { useUsageGate } from "@/hooks/use-usage-gate"
+import { FEATURES } from "@/lib/billing"
 import type { chatAgent } from "@/src/trigger/chat"
 import type { ChatUIMessage } from "@/src/trigger/tools"
 
@@ -116,6 +119,8 @@ function ChatMessages({
   bots?: ChatBot[]
 }) {
   const [botId, setBotId] = useState(bots?.[0]?.id)
+  const gate = useFeatureGate()
+  const usageGate = useUsageGate()
   const { messages, sendMessage, status, stop, error } = useChat<ChatUIMessage>(
     {
       id: chatId,
@@ -124,8 +129,10 @@ function ChatMessages({
     }
   )
 
-  function handleSubmit({ text }: PromptInputMessage) {
+  async function handleSubmit({ text }: PromptInputMessage) {
     if (!text.trim()) return
+    if (!gate(FEATURES.bots)) return
+    if (!(await usageGate("ai_tokens"))) return
     if (!botId) {
       sendMessage({ text })
       return
