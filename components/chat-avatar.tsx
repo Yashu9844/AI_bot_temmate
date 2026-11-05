@@ -8,10 +8,13 @@ const gaze = new Style(definition)
 function ChatAvatar({
   seed,
   animated = false,
+  alt = "",
   className,
 }: {
   seed: string
   animated?: boolean
+  // Decorative by default; pass a name where the face identifies someone
+  alt?: string
   className?: string
 }) {
   const src = new Avatar(gaze, {
@@ -22,7 +25,7 @@ function ChatAvatar({
   return (
     <Image
       src={src}
-      alt=""
+      alt={alt}
       width={32}
       height={32}
       unoptimized

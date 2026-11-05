@@ -6,6 +6,7 @@ import {
   useLoadTranscript,
   useTriggerChatTransport,
 } from "@trigger.dev/sdk/chat/react"
+import { ArrowRightLeftIcon } from "lucide-react"
 import { useState } from "react"
 import Image from "next/image"
 
@@ -16,6 +17,7 @@ import {
 } from "@/actions/chat"
 
 import { ChatAvatar } from "@/components/chat-avatar"
+import { Badge } from "@/components/ui/badge"
 import { CodeBlock } from "@/components/ai-elements/code-block"
 import {
   Conversation,
@@ -56,6 +58,25 @@ import type { ChatUIMessage } from "@/src/trigger/tools"
 type Part = ChatUIMessage["parts"][number]
 type ChatBot = { id: string; name: string; avatar: string }
 type ToolPart = Extract<Part, { type: `tool-${string}` }>
+type HandoffPart = Extract<Part, { type: "tool-handoff" }>
+
+// A group reply split by handoffs: each run of parts with the bot that wrote
+// it. The reply starts with the bot it was sent to, and each finished handoff
+// passes the rest of it to the next bot. The handoff part stays with the bot
+// that made it.
+function replySegments(message: ChatUIMessage) {
+  const segments: { botId: string | undefined; parts: Part[] }[] = [
+    { botId: message.metadata?.botId, parts: [] },
+  ]
+  for (const part of message.parts) {
+    segments.at(-1)!.parts.push(part)
+    if (part.type === "tool-handoff" && part.state === "output-available") {
+      segments.push({ botId: part.output.to.id, parts: [] })
+    }
+  }
+  // A handoff that just finished has nothing after it yet
+  return segments.filter((s, i) => i === 0 || s.parts.length > 0)
+}
 
 // Loads the saved transcript first, so useChat starts from the same history
 // the transport's resume cursor points past
@@ -105,8 +126,13 @@ function ChatMessages({
 
   function handleSubmit({ text }: PromptInputMessage) {
     if (!text.trim()) return
-    // Rides the transport's per-turn metadata; the agent answers as this bot
-    sendMessage({ text }, botId ? { metadata: { botId } } : undefined)
+    if (!botId) {
+      sendMessage({ text })
+      return
+    }
+    // The request metadata tells the agent which bot answers this turn; the
+    // message metadata is saved with the message, so its badge survives reloads
+    sendMessage({ text, metadata: { botId } }, { metadata: { botId } })
   }
 
   return (
@@ -119,15 +145,72 @@ function ChatMessages({
               description="Send a message to start the conversation"
             />
           ) : (
-            messages.map((message) => (
-              <Message key={message.id} from={message.role}>
+            messages.map((message) => {
+              // In a group chat, the bot a message was sent to or written by
+              const bot = bots?.find((b) => b.id === message.metadata?.botId)
+              const parts = message.parts.map((part, i) => (
+                <MessagePart key={i} part={part} />
+              ))
+              const content = (
                 <MessageContent>
-                  {message.parts.map((part, i) => (
-                    <MessagePart key={i} part={part} />
-                  ))}
+                  {bot && message.role === "user" ? (
+                    // Floated in normal flow, so the first line of text runs
+                    // beside the badge like a tag and later lines wrap under it
+                    <div className="flow-root">
+                      <Badge
+                        variant="outline"
+                        className="float-left mr-1.5 max-w-36 pl-0.5"
+                        title={bot.name}
+                      >
+                        <ChatAvatar seed={bot.avatar} className="size-4" />
+                        <span className="min-w-0 truncate">{bot.name}</span>
+                      </Badge>
+                      {parts}
+                    </div>
+                  ) : (
+                    parts
+                  )}
                 </MessageContent>
-              </Message>
-            ))
+              )
+
+              // In a group chat, a reply sits beside the face of the bot
+              // that wrote it; a handed-off reply shows each bot's part
+              // beside its own face
+              if (bots && message.role === "assistant") {
+                return replySegments(message).map((segment, i) => {
+                  const author = bots.find((b) => b.id === segment.botId)
+                  return (
+                    <Message
+                      key={`${message.id}-${i}`}
+                      from={message.role}
+                      className="flex-row items-start gap-3"
+                    >
+                      {author ? (
+                        <ChatAvatar
+                          seed={author.avatar}
+                          className="size-7"
+                          alt={author.name}
+                        />
+                      ) : (
+                        // Left the group, or replied before replies were tagged
+                        <div className="size-7 shrink-0" />
+                      )}
+                      <MessageContent>
+                        {segment.parts.map((part, j) => (
+                          <MessagePart key={j} part={part} />
+                        ))}
+                      </MessageContent>
+                    </Message>
+                  )
+                })
+              }
+
+              return (
+                <Message key={message.id} from={message.role}>
+                  {content}
+                </Message>
+              )
+            })
           )}
           {error && (
             <p className="text-sm text-destructive">
@@ -205,10 +288,37 @@ function MessagePart({ part }: { part: Part }) {
   if (part.type === "text") {
     return <MessageResponse>{part.text}</MessageResponse>
   }
+  if (part.type === "tool-handoff") {
+    return <HandoffNotice part={part} />
+  }
   if (part.type.startsWith("tool-")) {
     return <ToolCall part={part as ToolPart} />
   }
   return null
+}
+
+// One bot passing the message to another, with the note it left
+function HandoffNotice({ part }: { part: HandoffPart }) {
+  const text =
+    part.state === "output-available"
+      ? `Handed off to ${part.output.to.name}`
+      : part.state === "output-error"
+        ? "Couldn't hand off"
+        : "Handing off…"
+  const note = part.state === "output-available" ? part.output.note : undefined
+
+  return (
+    <div className="flex items-start gap-2 text-sm text-muted-foreground">
+      <ArrowRightLeftIcon className="mt-0.5 size-4 shrink-0" />
+      <div className="min-w-0">
+        <p className="font-medium">{text}</p>
+        {note && <p className="italic">“{note}”</p>}
+        {part.state === "output-error" && (
+          <p className="text-destructive">{part.errorText}</p>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // What the bot did, in a few words, from whatever input has streamed in so far

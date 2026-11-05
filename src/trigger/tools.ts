@@ -1,16 +1,30 @@
-import { chat, type InferChatUIMessageFromTools } from "@trigger.dev/sdk/ai"
-import { tool } from "ai"
+import { chat } from "@trigger.dev/sdk/ai"
+import { tool, type InferUITools, type UIDataTypes, type UIMessage } from "ai"
 import { z } from "zod"
 
 import { getComputer } from "@/lib/daytona"
+import type { Bot } from "@/lib/db/schema"
 
-// The answering bot's sandbox, set in the agent's onBoot
-export const botSandbox = chat.local<{ sandboxId: string | null }>({
-  id: "botSandbox",
-})
+export type TurnBot = Pick<
+  Bot,
+  "id" | "name" | "job" | "instructions" | "sandboxId"
+>
+
+// Who is in the chat and who is answering right now. Set at the start of each
+// turn; a handoff moves `answering` to another member partway through it
+export const turn = chat.local<{
+  isGroup: boolean
+  members: TurnBot[]
+  answering: TurnBot | null
+  // Bots that have held this turn, in order; a handoff can't go back to one
+  holders: string[]
+}>({ id: "turn" })
+
+// Handoffs one turn may chain, so bots can't pass a message around forever
+export const MAX_HANDOFFS_PER_TURN = 2
 
 async function sandbox() {
-  const { sandboxId } = botSandbox
+  const sandboxId = turn.answering?.sandboxId
   if (!sandboxId) throw new Error("This bot has no sandbox")
   return getComputer(sandboxId)
 }
@@ -221,6 +235,71 @@ export const tools = {
     execute: screenshot,
     toModelOutput: screenshotForModel,
   }),
+
+  handoff: tool({
+    description:
+      "Group chats only. Pass the user's latest message to another bot in this group whose job fits it better than yours. That bot takes over right away and answers in your place, with its own instructions and its own sandbox; you stop once this call returns. Don't answer the message yourself before handing off.",
+    inputSchema: z.object({
+      botId: z
+        .string()
+        .describe("The id of the group member to hand off to, from the member list"),
+      note: z
+        .string()
+        .trim()
+        .min(1)
+        .max(500)
+        .describe(
+          "One or two sentences for the other bot, which the user sees too: why it's better suited, and anything it needs to know"
+        ),
+    }),
+    execute: async ({ botId, note }) => {
+      const from = turn.answering
+      if (!turn.isGroup || !from) {
+        throw new Error("Handoffs only work in group chats.")
+      }
+      const to = turn.members.find((m) => m.id === botId)
+      if (!to) {
+        throw new Error(
+          `No bot with id "${botId}" is in this group. Use an id from the member list.`
+        )
+      }
+      if (to.id === from.id) {
+        throw new Error("You can't hand off to yourself. Answer the message.")
+      }
+      if (turn.holders.includes(to.id)) {
+        throw new Error(
+          `${to.name} already handed this message on, so it can't go back to them. Answer it yourself as best you can.`
+        )
+      }
+      if (turn.holders.length > MAX_HANDOFFS_PER_TURN) {
+        throw new Error(
+          "This message has been handed off too many times. Answer it yourself as best you can."
+        )
+      }
+
+      // The next step runs as the other bot: the agent's prepareStep swaps in
+      // its prompt, and the sandbox tools now reach its computer
+      turn.answering = to
+      turn.holders = [...turn.holders, to.id]
+      return {
+        from: { id: from.id, name: from.name },
+        to: { id: to.id, name: to.name },
+        note,
+      }
+    },
+    // Worded so it still reads right when replayed as history on later turns
+    toModelOutput: ({ output }) => ({
+      type: "text",
+      value: `Handoff done. ${output.from.name} handed the user's latest message to ${output.to.name}, with this note: "${output.note}". From here until the end of this reply, ${output.to.name} is the one answering.`,
+    }),
+  }),
 }
 
-export type ChatUIMessage = InferChatUIMessageFromTools<typeof tools>
+// Stamped on each reply by the agent, so a group chat can show who wrote it
+export type ChatMessageMetadata = { botId?: string }
+
+export type ChatUIMessage = UIMessage<
+  ChatMessageMetadata,
+  UIDataTypes,
+  InferUITools<typeof tools>
+>
