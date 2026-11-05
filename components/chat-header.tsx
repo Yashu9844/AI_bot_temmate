@@ -1,7 +1,6 @@
-import { MonitorIcon } from "lucide-react"
-
 import { BotDialog } from "@/components/bot-dialog"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { DesktopPanelTrigger } from "@/components/desktop-panel"
 import { Button } from "@/components/ui/button"
 import type { ChatWithMembers } from "@/queries/chats"
 
@@ -33,16 +32,7 @@ function ChatHeader({ chat }: { chat: ChatWithMembers }) {
           {title}
         </div>
       )}
-      {/* Placeholder: no action yet */}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Desktop"
-        className="ml-auto"
-      >
-        <MonitorIcon />
-      </Button>
+      <DesktopPanelTrigger className="ml-auto" />
     </header>
   )
 }

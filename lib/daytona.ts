@@ -57,3 +57,24 @@ export async function getComputer(sandboxId: string) {
 
   return sandbox
 }
+
+// noVNC, started with the rest of the desktop by computerUse.start()
+const VNC_PORT = 6080
+const VNC_URL_TTL_SECONDS = 60 * 60
+
+// A browser-ready noVNC URL for the sandbox's desktop. Signed, so it works in
+// an iframe without headers, and scoped to the VNC port only.
+export async function getVncUrl(sandboxId: string) {
+  const sandbox = await getComputer(sandboxId)
+  const { url } = await sandbox.getSignedPreviewUrl(
+    VNC_PORT,
+    VNC_URL_TTL_SECONDS
+  )
+
+  const vnc = new URL("/vnc.html", url)
+  vnc.searchParams.set("autoconnect", "true")
+  vnc.searchParams.set("reconnect", "true")
+  // Scale the remote desktop to whatever box the iframe is given
+  vnc.searchParams.set("resize", "scale")
+  return vnc.toString()
+}
